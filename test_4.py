@@ -4,191 +4,164 @@ from time import sleep
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 
-# === Pin mapping ===
-# Right driver (controls right-front and right-rear motors)
-RF_IN1 = 17  # Right Front motor input1
-RF_IN2 = 27  # Right Front motor input2
-RR_IN1 = 22  # Right Rear  motor input1 (new)
-RR_IN2 = 23  # Right Rear  motor input2 (new)
-EN_A   = 18  # PWM enable for right driver (controls both right motors)
+# === Pin Mapping ===
+# Right Driver
+RF_IN1, RF_IN2, RF_EN = 17, 27, 18   # Right Front motor
+RR_IN1, RR_IN2, RR_EN = 22, 23, 24   # Right Rear motor
 
-# Left driver (controls left-front and left-rear motors)
-LF_IN1 = 5   # Left Front motor input1
-LF_IN2 = 6   # Left Front motor input2
-LR_IN1 = 24  # Left Rear  motor input1 (new)
-LR_IN2 = 25  # Left Rear  motor input2 (new)
-EN_B   = 13  # PWM enable for left driver (controls both left motors)
+# Left Driver
+LF_IN1, LF_IN2, LF_EN = 5, 6, 12     # Left Front motor
+LR_IN1, LR_IN2, LR_EN = 13, 19, 26   # Left Rear motor
 
-# Setup motor pins as outputs
-pins = [RF_IN1, RF_IN2, RR_IN1, RR_IN2, LF_IN1, LF_IN2, LR_IN1, LR_IN2, EN_A, EN_B]
+# List all pins
+pins = [RF_IN1, RF_IN2, RR_IN1, RR_IN2, LF_IN1, LF_IN2, LR_IN1, LR_IN2,
+        RF_EN, RR_EN, LF_EN, LR_EN]
+
+# Setup all GPIO pins
 for p in pins:
     GPIO.setup(p, GPIO.OUT)
 
-# Setup PWM on enable pins (controls driver speed for both motors on that driver)
+# Setup PWM for each motor (independent speed control)
 FREQ = 100  # Hz
-pwm_right = GPIO.PWM(EN_A, FREQ)
-pwm_left  = GPIO.PWM(EN_B, FREQ)
-INITIAL_DUTY = 75
-pwm_right.start(INITIAL_DUTY)
-pwm_left.start(INITIAL_DUTY)
+pwm_rf = GPIO.PWM(RF_EN, FREQ)
+pwm_rr = GPIO.PWM(RR_EN, FREQ)
+pwm_lf = GPIO.PWM(LF_EN, FREQ)
+pwm_lr = GPIO.PWM(LR_EN, FREQ)
 
-# Convenience: map motor ids to their pins
+# Start all PWM with 75% speed
+pwm_rf.start(75)
+pwm_rr.start(75)
+pwm_lf.start(75)
+pwm_lr.start(75)
+
+# Motor dictionary for easy control
 MOTORS = {
-    'rf': (RF_IN1, RF_IN2),  # right front
-    'rr': (RR_IN1, RR_IN2),  # right rear
-    'lf': (LF_IN1, LF_IN2),  # left front
-    'lr': (LR_IN1, LR_IN2),  # left rear
+    'rf': (RF_IN1, RF_IN2, pwm_rf),
+    'rr': (RR_IN1, RR_IN2, pwm_rr),
+    'lf': (LF_IN1, LF_IN2, pwm_lf),
+    'lr': (LR_IN1, LR_IN2, pwm_lr)
 }
 
-# Helper functions
+# === Motor control functions ===
 def motor_forward(motor_id):
-    a, b = MOTORS[motor_id]
+    a, b, _ = MOTORS[motor_id]
     GPIO.output(a, GPIO.HIGH)
     GPIO.output(b, GPIO.LOW)
 
 def motor_backward(motor_id):
-    a, b = MOTORS[motor_id]
+    a, b, _ = MOTORS[motor_id]
     GPIO.output(a, GPIO.LOW)
     GPIO.output(b, GPIO.HIGH)
 
 def motor_stop(motor_id):
-    a, b = MOTORS[motor_id]
+    a, b, _ = MOTORS[motor_id]
     GPIO.output(a, GPIO.LOW)
     GPIO.output(b, GPIO.LOW)
 
-def all_forward():
-    for m in MOTORS:
-        motor_forward(m)
-
-def all_backward():
-    for m in MOTORS:
-        motor_backward(m)
+def motor_speed(motor_id, speed):
+    _, _, pwm = MOTORS[motor_id]
+    pwm.ChangeDutyCycle(max(0, min(100, speed)))
 
 def stop_all():
     for m in MOTORS:
         motor_stop(m)
 
-def set_speed_right(duty):
-    # clamp 0..100
-    duty = max(0, min(100, duty))
-    pwm_right.ChangeDutyCycle(duty)
-    return duty
+# === Basic bot control ===
+def forward():
+    for m in MOTORS:
+        motor_forward(m)
+    print("Moving Forward")
 
-def set_speed_left(duty):
-    duty = max(0, min(100, duty))
-    pwm_left.ChangeDutyCycle(duty)
-    return duty
+def backward():
+    for m in MOTORS:
+        motor_backward(m)
+    print("Moving Backward")
 
-# Start with all motors stopped
-stop_all()
+def left_turn():
+    motor_backward('lf')
+    motor_backward('lr')
+    motor_forward('rf')
+    motor_forward('rr')
+    print("Turning Left")
 
-# current speeds
-speed_right = INITIAL_DUTY
-speed_left  = INITIAL_DUTY
+def right_turn():
+    motor_forward('lf')
+    motor_forward('lr')
+    motor_backward('rf')
+    motor_backward('rr')
+    print("Turning Right")
 
-help_text = """
-Control Bot with keys:
-  w : forward (all)
-  s : backward (all)
-  a : turn left  (right motors forward, left motors backward)
-  d : turn right (left motors forward, right motors backward)
-  c : stop (all)
-  q : quit
+# === Main loop ===
+print("""
+Control Bot with:
+  w = Forward
+  s = Backward
+  a = Left
+  d = Right
+  c = Stop
+  q = Quit
 
-Single-wheel commands (two-letter):
-  rf  : right-front forward
-  rfb : right-front backward
-  rr  : right-rear forward
-  rrb : right-rear backward
-  lf  : left-front forward
-  lfb : left-front backward
-  lr  : left-rear forward
-  lrb : left-rear backward
-  <id>0 : stop that wheel, e.g. rf0 stops right-front
+Individual wheel test:
+  rf, rr, lf, lr = forward
+  rfb, rrb, lfb, lrb = backward
+  rf0, rr0, lf0, lr0 = stop
 
-Speed control (affects entire driver side):
-  +r  : increase RIGHT driver speed by 5
-  -r  : decrease RIGHT driver speed by 5
-  +l  : increase LEFT  driver speed by 5
-  -l  : decrease LEFT  driver speed by 5
+Speed control:
+  rf+ / rf- , rr+ / rr-, lf+ / lf-, lr+ / lr-
+""")
 
-Examples:
-  rf   -> right-front forward
-  rrb  -> right-rear backward
-  +r   -> bump right side speed up
-"""
-
-print(help_text)
+# Current speeds
+speed = {'rf': 75, 'rr': 75, 'lf': 75, 'lr': 75}
 
 try:
     while True:
-        cmd = input("Enter command: ").strip().lower()
+        cmd = input("Enter command: ").lower().strip()
 
-        # Basic motions
         if cmd == 'w':
-            all_forward()
-            print("Forward (all)")
+            forward()
         elif cmd == 's':
-            all_backward()
-            print("Backward (all)")
+            backward()
+        elif cmd == 'a':
+            left_turn()
+        elif cmd == 'd':
+            right_turn()
         elif cmd == 'c':
             stop_all()
-            print("Stop (all)")
+            print("Stop All")
         elif cmd == 'q':
             print("Exiting...")
             break
-        elif cmd == 'd':
-            # Turn right: left motors forward, right motors backward
-            motor_forward('lf')
-            motor_forward('lr')
-            motor_backward('rf')
-            motor_backward('rr')
-            print("Turn right")
-        elif cmd == 'a':
-            # Turn left: right motors forward, left motors backward
-            motor_forward('rf')
-            motor_forward('rr')
-            motor_backward('lf')
-            motor_backward('lr')
-            print("Turn left")
 
-        # Single wheel controls:
-        elif cmd in ('rf', 'rfb', 'rr', 'rrb', 'lf', 'lfb', 'lr', 'lrb'):
-            mid = cmd[:2]  # 'rf','rr','lf','lr'
-            if cmd.endswith('b'):
-                motor_backward(mid)
-                print(f"{mid} backward")
-            else:
-                motor_forward(mid)
-                print(f"{mid} forward")
-
-        elif len(cmd) == 3 and cmd.endswith('0') and cmd[:2] in MOTORS:
+        # --- Individual motor commands ---
+        elif cmd in ['rf', 'rr', 'lf', 'lr']:
+            motor_forward(cmd)
+            print(f"{cmd} forward")
+        elif cmd in ['rfb', 'rrb', 'lfb', 'lrb']:
+            motor_backward(cmd[:2])
+            print(f"{cmd[:2]} backward")
+        elif cmd in ['rf0', 'rr0', 'lf0', 'lr0']:
             motor_stop(cmd[:2])
             print(f"{cmd[:2]} stopped")
 
-        # Speed adjustments for driver sides
-        elif cmd == '+r':
-            speed_right = set_speed_right(speed_right + 5)
-            print(f"Right driver speed: {speed_right}%")
-        elif cmd == '-r':
-            speed_right = set_speed_right(speed_right - 5)
-            print(f"Right driver speed: {speed_right}%")
-        elif cmd == '+l':
-            speed_left = set_speed_left(speed_left + 5)
-            print(f"Left driver speed: {speed_left}%")
-        elif cmd == '-l':
-            speed_left = set_speed_left(speed_left - 5)
-            print(f"Left driver speed: {speed_left}%")
+        # --- Individual motor speed adjustments ---
+        elif len(cmd) == 3 and cmd[:2] in speed and cmd[2] in ['+', '-']:
+            m = cmd[:2]
+            if cmd[2] == '+':
+                speed[m] = min(100, speed[m] + 5)
+            else:
+                speed[m] = max(0, speed[m] - 5)
+            motor_speed(m, speed[m])
+            print(f"{m} speed set to {speed[m]}%")
 
         else:
-            print("Invalid command! Type w/s/a/d/c/q or use two-letter wheel commands. See help above.")
+            print("Invalid command!")
 
 except KeyboardInterrupt:
-    print("\nKeyboard interrupt, exiting...")
+    print("\nKeyboard Interrupt. Exiting...")
 
 finally:
     stop_all()
-    pwm_right.stop()
-    pwm_left.stop()
+    for _, _, pwm in MOTORS.values():
+        pwm.stop()
     GPIO.cleanup()
-    print("GPIO cleaned up, program ended.")
+    print("GPIO Cleaned up. Program Ended.")
